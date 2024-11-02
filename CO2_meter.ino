@@ -6,14 +6,20 @@
 #include <DHT.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1351.h>
+#include <Adafruit_NeoPixel.h>
 #include <SPI.h>
 #include "bitmap.h"
 
 //Pin definitions
-#define RX_PIN D4         //MH-Z19 RX-PIN                                         
-#define TX_PIN D3         //MH-Z19 TX-PIN                                   
-#define DHTPIN D6         //DHT11 Pin
+#define RX_PIN 2         //MH-Z19 RX-PIN                                         
+#define TX_PIN 0         //MH-Z19 TX-PIN                                   
+#define DHTPIN 12        //DHT11 Pin
+#define LEDPIN 15        //LED Pin 
+#define NUM_LEDS 4        //Number of LEDs
 #define BAUDRATE 9600    //Terminal Baudrate
+
+// define LED strip
+Adafruit_NeoPixel strip(NUM_LEDS, LEDPIN, NEO_GRB + NEO_KHZ800);
 
 //DHT11 Sensor
 #define DHTTYPE    DHT11
@@ -30,11 +36,11 @@ unsigned long getDataTimer = 0;
 #define SCREEN_WIDTH  128
 #define SCREEN_HEIGHT 128
 
-#define SCLK_PIN D5
-#define MOSI_PIN D7
-#define DC_PIN   D1
-#define CS_PIN   D2
-#define RST_PIN  D0
+#define SCLK_PIN 14
+#define MOSI_PIN 13
+#define DC_PIN   5
+#define CS_PIN   4
+#define RST_PIN  16
 
 // Color definitions
 #define BLACK           0x0000
@@ -45,29 +51,45 @@ unsigned long getDataTimer = 0;
 #define MAGENTA         0xF81F
 #define YELLOW          0xFFE0
 #define WHITE           0xFFFF
-//
-//Define CO2
+
+//Convert color to RGB
+uint32_t convertColor(uint16_t color) {
+  // Extract the red, green, and blue components from the 16-bit color
+  uint8_t r = (color >> 11) & 0x1F;
+  uint8_t g = (color >> 5) & 0x3F;
+  uint8_t b = color & 0x1F;
+
+  // Scale the components to 8 bits
+  r = (r * 255) / 31;
+  g = (g * 255) / 63;
+  b = (b * 255) / 31;
+
+  // Combine the components into a 24-bit color
+  return strip.Color(r, g, b);
+}
+
+//Define CO2 limits
 #define CO2OK 1000
 #define CO2NOK 2000
+
 //Define map limits
 #define MinMapValue 10
 #define MaxMapValue 65
 
-//Some definitions
+//Array definitions
 #define NOOFARRAY   15
 #define NOOFENTRIES 60
-#define UPDATETIME  60000
+#define UPDATETIME  2000
 
 //Create needed objects
 Adafruit_SSD1351 tft = Adafruit_SSD1351(SCREEN_WIDTH, SCREEN_HEIGHT, CS_PIN, DC_PIN, MOSI_PIN, SCLK_PIN, RST_PIN);
-//
 
-//Some global vars
+//Global vars
 bool bFirstRun = true;
 double dCurrentTemp = 0.0;
 float fCurrentHum = 0.0;
 float fcurrentCO2 = 0.0;
-int iCO2Array[NOOFARRAY];  //Array for temporal course CO2
+int iCO2Array[NOOFARRAY];  // Array for temporal course CO2
 unsigned long iLastUpate = 0;
 /*
   =================================================================
@@ -86,12 +108,27 @@ void setup() {
 
   while (!Serial) delay(20);    // Wait until serial communication is ready
 
+  //Start LEDs
+  strip.begin();
+  strip.show();
+  strip.setBrightness(50);
+  colorWipe(strip.Color(255, 0, 0), 50); // Red
+  colorWipe(strip.Color(255, 213, 0), 50); // Yellow
+  colorWipe(strip.Color(0, 255, 0), 50); // Green
+  colorWipe(strip.Color(255, 255, 255), 50); // White
+  strip.fill(strip.Color(0, 0, 0));
+  strip.show();
+
   //Start with some text in serial monitor and tft
-  tft.fillScreen(BLACK);  // Clear screen
+  tft.fillScreen(BLACK);
   tft.setTextSize(2);
   tft.setTextColor(RED);
   tft.setCursor(50, 10);
-  tft.print("CO2");
+  tft.print("CO");
+  tft.setTextSize(1); 
+  tft.setCursor(75, 20);
+  tft.print("2");
+  tft.setTextSize(2);
   tft.setTextColor(RED);
   tft.setCursor(60, 28);
   tft.print("-");
@@ -108,7 +145,7 @@ void setup() {
   tft.setCursor(0, 90);
   delay(5000);
   
-  tft.fillScreen(BLACK);  // Clear screen
+  tft.fillScreen(BLACK);
   tft.setTextColor(WHITE);
   tft.setCursor(25, 30);
   tft.print("Device startup");
@@ -124,18 +161,16 @@ void setup() {
   tft.setCursor(100, 70);
   tft.print("DONE");
   delay(5000);
+  tft.fillScreen(BLACK);
   
-  tft.fillScreen(BLACK);  // Clear screen
+  
   tft.setTextColor(WHITE);
   tft.setCursor(0, 60);
   tft.print("Waiting 10 seconds");
   tft.setCursor(0, 70);
   tft.print("for MH-Z19 sensor ... ");
   delay(10000);
-  tft.setTextColor(WHITE);
-  tft.setCursor(0, 60);
-  tft.print("Continuing ... ");
-  tft.fillScreen(BLACK);  // Clear screen
+  tft.fillScreen(BLACK);
   
   //Check im MH-Z19 is available
   tft.setTextColor(WHITE);
@@ -158,10 +193,11 @@ void setup() {
     {
       Serial.println("Failed to recieve CO2 value - Error");
       Serial.print("Response Code: ");
-      Serial.println(myMHZ19.errorCode);          // Get the Error Code value
+      colorWipe(strip.Color(0, 255, 0), 50); // Green
+      Serial.println(myMHZ19.errorCode);     // Get the Error Code value
       tft.setTextColor(RED);
       tft.println("FAIL");
-      while (1); //Endless loop
+      while (1);                              // Endless loop
     }
     getDataTimer = millis();
   }
@@ -176,12 +212,6 @@ void setup() {
   
   //autocalibration for MH-z19
   myMHZ19.autoCalibration(false);
-  tft.setTextColor(YELLOW);
-  tft.setCursor(40, 50);
-  tft.print("MH-Z19");
-  tft.setCursor(0, 60);
-  tft.print("Autocalibration OFF");
-  delay(2000);
   tft.fillScreen(BLACK);  // Clear screen
   tft.setTextSize(1);
   tft.setTextColor(WHITE);
@@ -196,10 +226,11 @@ void setup() {
   tft.setTextSize(1);
   tft.setCursor(25, 50);
   tft.println("Clearing DONE");
+  tft.fillScreen(BLACK);  // Clear screen
 }
 
 void loop() {
-  //Just want data every 60sec or during first start
+  // Just want data every 60sec or during first start
   if (millis() - iLastUpate > UPDATETIME || bFirstRun)
   {
     UpdateIndoorClimate();  // Receive data from MH-Z19
@@ -228,6 +259,24 @@ void UpdateIndoorClimate() {
   dCurrentTemp = dht.readTemperature();
   fCurrentHum = dht.readHumidity();
   fcurrentCO2 = myMHZ19.getCO2();
+  
+  // Check if DHT11 data is within limits of specs on data sheet
+  if (dCurrentTemp < 0 || dCurrentTemp > 50) {
+    Serial.println("invalid temperature value: " + String(dCurrentTemp));
+    dCurrentTemp = NAN;  // Ignoring invalid values
+  }
+  if (fCurrentHum < 20 || fCurrentHum > 90) {
+    Serial.println("invalid humidity value: " + String(fCurrentHum));
+    fCurrentHum = NAN;  // Ignoring invalid values
+  }
+
+  // Update data if valid
+  if (!isnan(dCurrentTemp)) {
+    dCurrentTemp = dCurrentTemp;
+  }
+  if (!isnan(fCurrentHum)) {
+    fCurrentHum = fCurrentHum;
+  }
 }
 
 /*
@@ -260,19 +309,22 @@ void WriteDataToSerialMonitor() {
   =================================================================
 */
 void UpdateArray(int iCO2) {
-  //Swap data array for the last minutes
+  // Sanity Check for CO2 data
+  if (iCO2 < 0) {
+    Serial.println("Invalid CO2 Value: " + String(iCO2));
+    return;  // ignore invalid values
+  }
+  // Swap data array for the last minutes
   for (int iCnt = 0; iCnt < (NOOFARRAY - 1); iCnt++)
     iCO2Array[iCnt] = iCO2Array[iCnt + 1];
   iCO2Array[NOOFARRAY - 1] = iCO2;
   Serial.println("Current values in array:");
-  for (int iCnt = 0; iCnt < NOOFARRAY; iCnt++)
-  {
-    if ( iCnt != 0)
+  for (int iCnt = 0; iCnt < NOOFARRAY; iCnt++) {
+    if (iCnt != 0)
       Serial.print(" | ");
     Serial.print(iCO2Array[iCnt]);
   }
   Serial.println("");
-
 }
 
 /*
@@ -283,32 +335,35 @@ void UpdateArray(int iCO2) {
   =================================================================
 */
 void UpdateDisplayInfo() {
+  const int barWidth = 1;  // Width of the bars in the graph
+  const int barSpacing = 1;  // Spacing between the bars in the graph
+  const int graphBaseX = 5;  // Base-X-Position of graph
+  const int graphBaseY = 115;  // base-Y-Position of graph
+
   tft.fillScreen(BLACK);
-  tft.drawLine(5, 115, 5, 50, WHITE);  // Y-axis
-  tft.drawLine(5, 115, 128, 115, WHITE); // X-Axis
+  tft.drawLine(graphBaseX, graphBaseY, graphBaseX, 50, WHITE);  // Y-axis 
+  tft.drawLine(graphBaseX, graphBaseY, 128, graphBaseY, WHITE); // X-axis
   
-  //x-axis label
+  // X-Achsen-Beschriftung
   tft.setTextColor(WHITE);
   tft.setCursor(8, 120);
   tft.print("0 Min.");
   tft.setCursor(85, 120);
-  tft.print("12 Min.");
+  tft.print("60 Min.");
   
-  //Arrows Y-Axis
-  tft.drawLine(5, 50, 10, 55, WHITE);
-  tft.drawLine(5, 50, 0, 55, WHITE);
+  // Pfeile Y-Achse
+  tft.drawLine(graphBaseX, 50, graphBaseX + 5, 55, WHITE);
+  tft.drawLine(graphBaseX, 50, graphBaseX - 5, 55, WHITE);
   
-  //Arrows X-Axis
-  tft.drawLine(128, 115, 123, 110, WHITE);
-  tft.drawLine(128, 115, 123, 120, WHITE);
+  // Pfeile X-Achse
+  tft.drawLine(128, graphBaseY, 123, graphBaseY - 5, WHITE);
+  tft.drawLine(128, graphBaseY, 123, graphBaseY + 5, WHITE);
 
-  //Get highest PPM to calculate max for graph
+  // Höchsten PPM-Wert finden, um die maximale Skalierung für den Graphen zu berechnen
   int iHighestPPM = 0;
   int iHighestMap = 0;
-  for (int iCnt = 0; iCnt < NOOFARRAY; iCnt++)
-  {
-    if (iHighestPPM < iCO2Array[iCnt])
-    {
+  for (int iCnt = 0; iCnt < NOOFARRAY; iCnt++) {
+    if (iHighestPPM < iCO2Array[iCnt]) {
       iHighestPPM = iCO2Array[iCnt];
       Serial.println("Highest PPM: " + String(iCO2Array[iCnt]) + " ppm");
       iHighestMap = int(iHighestPPM / 100) * 100 + 200;
@@ -316,50 +371,55 @@ void UpdateDisplayInfo() {
     }
   }
 
-  //Go through array, starting at the end
+  // Durch das Array iterieren und die CO2-Werte grafisch darstellen
   int iNoValues = 0;
   int iSumArray = 0;
-  for (int iCnt = NOOFARRAY - 1; iCnt >= 0; iCnt--)
-  {
-    if (iCO2Array[iCnt] != 0)
-    {
+  uint16_t currentColor = WHITE;  // Default color
+  for (int iCnt = NOOFARRAY - 1; iCnt >= 0; iCnt--) {
+    if (iCO2Array[iCnt] != 0) {
       iNoValues++;
       iSumArray += iCO2Array[iCnt];
-      //Correction and mapping value for graph
+      // Korrektur und Mapping-Wert für den Graphen
       int iMappedValue = map(iCO2Array[iCnt], 400, iHighestMap, MinMapValue, MaxMapValue);
-      //Find correct graph-color
-      uint32_t color;
+      // Richtige Farbe für den Graphen finden
+      uint16_t color;
       if (iCO2Array[iCnt] < CO2OK)
         color = GREEN;
       else if (iCO2Array[iCnt] >= CO2OK && iCO2Array[iCnt] < CO2NOK)
         color = YELLOW;
       else
         color = RED;
-      //Draw the graph-segments for each item from array
-      tft.drawLine(5 + (NOOFARRAY - 1 - iCnt) * 10 + 2, 114 - iMappedValue, 5 + (NOOFARRAY - 1 - iCnt) * 10 + 2, 114, color);
-      tft.drawLine(5 + (NOOFARRAY - 1 - iCnt) * 10 + 3, 114 - iMappedValue, 5 + (NOOFARRAY - 1 - iCnt) * 10 + 3, 114, color);
-      tft.drawLine(5 + (NOOFARRAY - 1 - iCnt) * 10 + 4, 114 - iMappedValue, 5 + (NOOFARRAY - 1 - iCnt) * 10 + 4, 114, color);
-      tft.drawLine(5 + (NOOFARRAY - 1 - iCnt) * 10 + 5, 114 - iMappedValue, 5 + (NOOFARRAY - 1 - iCnt) * 10 + 5, 114, color);
-      tft.drawLine(5 + (NOOFARRAY - 1 - iCnt) * 10 + 6, 114 - iMappedValue, 5 + (NOOFARRAY - 1 - iCnt) * 10 + 6, 114, color);
-      tft.drawLine(5 + (NOOFARRAY - 1 - iCnt) * 10 + 7, 114 - iMappedValue, 5 + (NOOFARRAY - 1 - iCnt) * 10 + 7, 114, color);
-      tft.drawLine(5 + (NOOFARRAY - 1 - iCnt) * 10 + 8, 114 - iMappedValue, 5 + (NOOFARRAY - 1 - iCnt) * 10 + 8, 114, color);
-      tft.drawLine(5 + (NOOFARRAY - 1 - iCnt) * 10 + 9, 114 - iMappedValue, 5 + (NOOFARRAY - 1 - iCnt) * 10 + 9, 114, color);
-      tft.drawLine(5 + (NOOFARRAY - 1 - iCnt) * 10 + 10, 114 - iMappedValue, 5 + (NOOFARRAY - 1 - iCnt) * 10 + 10, 114, color);
+      // Graph-Segmente für jedes Element im Array zeichnen
+      int x = graphBaseX + (NOOFARRAY - 1 - iCnt) * (barWidth + barSpacing);
+      tft.drawLine(x, graphBaseY - iMappedValue, x, graphBaseY, color);
+      
+      // Update the current color for the LED
+      if (iCnt == NOOFARRAY - 1) {
+        currentColor = color;
+      }
     }
   }
 
-  //Draw Average
+  // Convert currentColor to RGB values and set the LED color for all LEDs
+  uint32_t rgbColor = convertColor(currentColor);
+  for (int i = 0; i < strip.numPixels(); i++) {
+    strip.setPixelColor(i, rgbColor);
+  }
+  strip.show();
+
+  // Durchschnitt zeichnen
   int iAverage = int((iSumArray / iNoValues) / 100) * 100;
   if ((iAverage % 100) >= 50)
     iAverage += 50;
   int iMappedValue = map(iAverage, 400, iHighestMap, MinMapValue, MaxMapValue);
-  tft.drawLine(6, 114 - iMappedValue, 120, 114 - iMappedValue, BLUE);
+  iMappedValue = constrain(iMappedValue, MinMapValue, MaxMapValue);
+  tft.drawLine(graphBaseX + 1, graphBaseY - iMappedValue, 120, graphBaseY - iMappedValue, BLUE);
   tft.setTextSize(1);
   tft.setTextColor(BLUE);
-  tft.setCursor(100, 114 - iMappedValue - 10);
+  tft.setCursor(100, graphBaseY - iMappedValue - 10);
   tft.print(iAverage);
 
-  //Write latest data to display
+  // Neueste Daten auf dem Display anzeigen
   tft.setTextSize(1);
   tft.setTextColor(WHITE);
   tft.setCursor(0, 0);
@@ -380,8 +440,7 @@ void UpdateDisplayInfo() {
   tft.setCursor(0, 30);
   tft.print("Frischluft:");
   tft.setCursor(0, 40);
-  if (iCO2Array[NOOFARRAY - 1] < CO2OK)
-  {
+  if (iCO2Array[NOOFARRAY - 1] < CO2OK) {
     tft.setTextColor(GREEN);
     tft.print("nicht notwendig!");
     tft.drawBitmap(105, 25, okay, 20, 20, GREEN);
@@ -397,5 +456,13 @@ void UpdateDisplayInfo() {
     tft.setTextColor(RED);
     tft.print("sofort notwendig!");
     tft.drawBitmap(105, 25, error, 20, 20, RED);
+  }
+}
+
+void colorWipe(uint32_t color, int wait) {
+  for(int i=0; i<strip.numPixels(); i++) { 
+    strip.setPixelColor(i, color); 
+    strip.show();
+    delay(wait);
   }
 }
